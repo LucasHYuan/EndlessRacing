@@ -1,6 +1,7 @@
 using System.Collections;
 using System.Collections.Generic;
 using UnityEngine;
+using UnityEngine.Rendering;
 
 public class WorldGenerator : MonoBehaviour
 {
@@ -11,11 +12,25 @@ public class WorldGenerator : MonoBehaviour
     public float scale;
     public float waveHeight;
     public float globalSpeed;
-
+    public float randomness;
+    public float startTransitionLength;
+    private Vector3[] beginPoints;
     GameObject[] pieces = new GameObject[2];
-
+    public int startObstacleChance;
+    public GameObject gate;
+    public int obstacleChanceAcceleration;
+    public int gateChance;
+    public GameObject[] obstacles;
+    private GameObject currentCyclinder;
+    public BasicMovement lampMovement;
+    public int showItemDistance;
+    public float shadowHeight;
+    int level = 0;
+    int gateCount = 0;
+    int gateLimit = 3;
     void Start()
     {
+        beginPoints = new Vector3[(int)dimensions.x + 1];
         for(int i = 0; i < 2; ++i)
         {
             GenerateWorldPiece(i);
@@ -24,16 +39,26 @@ public class WorldGenerator : MonoBehaviour
 
     void GenerateWorldPiece(int i)
     {
+        level++;
+        if(level > 3)
+        {
+            gateChance += 5;
+            startObstacleChance -= 100;
+            globalSpeed += 5;
+            foreach (var piece in pieces)
+            {
+                piece.GetComponent<BasicMovement>().moveSpeed = -globalSpeed;
+            }
+        }
         pieces[i] = CreateCylinder();
         pieces[i].transform.Translate(Vector3.forward * (dimensions.y * scale * Mathf.PI) * i);
-
         UpdateSinglePiece(pieces[i]);
 
     }
 
     void LateUpdate()
     {
-        if (pieces[1] && pieces[1].transform.position.z <= 0)
+        if (pieces[1] && pieces[1].transform.position.z <= -15f)
         {
             StartCoroutine(UpdateWorldPieces());
         }
@@ -52,16 +77,40 @@ public class WorldGenerator : MonoBehaviour
         yield return 0;
     }
 
+    void UpdateAllItems()
+    {
+        GameObject[] items = GameObject.FindGameObjectsWithTag("Item");
+
+        for (int i = 0; i < items.Length; i++)
+        {
+            foreach (MeshRenderer renderer in items[i].GetComponentsInChildren<MeshRenderer>())
+            {
+                bool show = items[i].transform.position.z < showItemDistance;
+                if (show)
+                    renderer.shadowCastingMode = (items[i].transform.position.y < shadowHeight) ? ShadowCastingMode.On : ShadowCastingMode.Off;
+                renderer.enabled = show;
+            }
+        }
+    }
+
 
     void UpdateSinglePiece(GameObject piece)
     {
         BasicMovement bm = piece.AddComponent<BasicMovement>();
         bm.moveSpeed = -globalSpeed;
 
+        if(lampMovement != null)
+            bm.rotateSpeed = lampMovement.rotateSpeed;
+
         GameObject endPoint = new GameObject();
         endPoint.transform.position = piece.transform.position + Vector3.forward * (dimensions.y * scale * Mathf.PI);
         endPoint.name = "EndPoint";
         endPoint.transform.parent = piece.transform;
+
+        perlinOffset += randomness;
+
+        if (startObstacleChance > 5)
+            startObstacleChance -= obstacleChanceAcceleration;
     }
 
 
@@ -69,7 +118,7 @@ public class WorldGenerator : MonoBehaviour
     {
         GameObject newCylinder = new GameObject();
         newCylinder.name = "WorldPiece";
-
+        currentCyclinder = newCylinder;
         MeshFilter meshFilter = newCylinder.AddComponent<MeshFilter>();
         MeshRenderer meshRenderer = newCylinder.AddComponent<MeshRenderer>();
 
@@ -129,6 +178,25 @@ public class WorldGenerator : MonoBehaviour
 
                 Vector3 center = new Vector3(0, 0, vertices[idx].z);
                 vertices[idx] += (center - vertices[idx]).normalized * Mathf.PerlinNoise(pX,pZ) * waveHeight;
+
+                if(z < startTransitionLength && beginPoints[0] != Vector3.zero)
+                {
+                    float perlinPercentage = z * (1f / startTransitionLength);
+                    Vector3 beginPoint = new Vector3(beginPoints[x].x, beginPoints[x].y, vertices[idx].z);
+                    vertices[idx] = (perlinPercentage * vertices[idx]) + (1 - perlinPercentage) * beginPoint;
+                }
+                else if(z == zCount)
+                {
+                    beginPoints[x] = vertices[idx];
+                }
+
+
+                if(Random.Range(0, startObstacleChance) == 0 
+                    && !(gate == null && obstacles.Length == 0))
+                {
+                    CreateItem(vertices[idx], x);
+                }
+
                 ++idx;
             }
         }
@@ -163,4 +231,43 @@ public class WorldGenerator : MonoBehaviour
         }
     }
 
+    public Transform GetWorldPiece()
+    {
+        return pieces[0].transform;
+    }
+
+
+    void CreateItem(Vector3 vec, int x)
+    {
+        Vector3 zCenter = new Vector3(0,0,vec.z);
+        if (zCenter - vec == Vector3.zero || x == (int)dimensions.x / 4 || x == (int)dimensions.x / 4 * 3)
+            return;
+        GameObject newItem = Instantiate(
+            UnityEngine.Random.Range(0, gateChance) == 0 
+            ? gate 
+            : obstacles[UnityEngine.Random.Range(0, obstacles.Length)]
+            );
+        newItem.transform.rotation = Quaternion.LookRotation(zCenter - vec, Vector3.up);
+        newItem.transform.position = vec;
+        newItem.transform.SetParent(currentCyclinder.transform, false);
+    }
+
+    public void UpdateGateChance()
+    {
+        gateCount++;
+        if(gateCount > gateLimit)
+        {
+            gateChance++;
+            gateCount = 0;
+            gateLimit++;
+        }
+        startObstacleChance--;
+        globalSpeed++;
+        perlinScale += 0.005f;
+        foreach(var piece in pieces)
+        {
+            piece.GetComponent<BasicMovement>().moveSpeed = -globalSpeed;
+        }
+    }
 }
+
